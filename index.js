@@ -37,7 +37,7 @@ const SLOTS_CHANNEL_ID = process.env.SLOTS_CHANNEL_ID;
 const MAP_VOTING_CHANNEL_ID = process.env.MAP_VOTING_CHANNEL_ID; 
 const DATA_FILE = './ekipet.json'; 
 
-const AVAILABLE_MAPS = ['Erangel', 'Miramar', 'Sanhok', 'Vikendi', 'Taego', 'Rondo'];
+const AVAILABLE_MAPS = ['Erangel', 'Miramar', 'Sanhok', 'Vikendi', 'Erangel', 'Rondo'];
 
 const TOURNAMENT_DATA = {
     reg_open: false,
