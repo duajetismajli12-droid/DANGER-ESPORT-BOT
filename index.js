@@ -1,5 +1,6 @@
 require('dotenv').config();
-const fs = require('fs'); // Moduli për të shkruar skedarë në VS Code
+const fs = require('fs'); 
+const http = require('http'); // 🔥 SHTESA PËR RENDER: Moduli për hapjen e portës
 const { 
     Client, 
     GatewayIntentBits, 
@@ -12,6 +13,17 @@ const {
     TextInputStyle 
 } = require('discord.js');
 
+// ==========================================
+// 🔥 SHTESA KRYESORE PËR RENDER (DUMMY SERVER)
+// ==========================================
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('PUBG Danger Bot është ONLINE!\n');
+}).listen(PORT, () => {
+    console.log(`🚀 [RENDER] Serveri dummy po dëgjon në portën ${PORT}`);
+});
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -22,23 +34,28 @@ const client = new Client({
 
 const PREFIX = '!';
 const SLOTS_CHANNEL_ID = process.env.SLOTS_CHANNEL_ID; 
-const DATA_FILE = './ekipet.json'; // Skedari që do të krijohet në VS Code
+const MAP_VOTING_CHANNEL_ID = process.env.MAP_VOTING_CHANNEL_ID; 
+const DATA_FILE = './ekipet.json'; 
 
-// Të dhënat e Turneut
+const AVAILABLE_MAPS = ['Erangel', 'Miramar', 'Sanhok', 'Vikendi', 'Taego', 'Rondo'];
+
 const TOURNAMENT_DATA = {
     reg_open: false,
     checkin_open: false,
-    max_slots: 25,
+    max_slots: 25,          
     teams: new Map(),      
     checked_in: new Set(),
-    slots_msg_id: null 
+    slots_msg_id: null,
+    reg_msg_id: null,       
+    reg_channel_id: null,
+    maps_voting_open: false,
+    maps_msg_id: null,
+    map_votes: {} 
 };
 
 // ==========================================
-// FUNKSIONET PËR RUAJTJEN DHE LEXIMIN E TË DHËNAVE
+// FUNKSIONET PËR RUAJTJEN DHE LEXIMIN
 // ==========================================
-
-// Ngarkon të dhënat nga skedari JSON kur ndizet bot-i
 function loadTournamentData() {
     if (fs.existsSync(DATA_FILE)) {
         try {
@@ -47,21 +64,24 @@ function loadTournamentData() {
             
             TOURNAMENT_DATA.reg_open = parsed.reg_open || false;
             TOURNAMENT_DATA.checkin_open = parsed.checkin_open || false;
-            TOURNAMENT_DATA.max_slots = parsed.max_slots || 16;
+            TOURNAMENT_DATA.max_slots = parsed.max_slots || 25;
             TOURNAMENT_DATA.slots_msg_id = parsed.slots_msg_id || null;
+            TOURNAMENT_DATA.reg_msg_id = parsed.reg_msg_id || null;
+            TOURNAMENT_DATA.reg_channel_id = parsed.reg_channel_id || null;
+            TOURNAMENT_DATA.maps_voting_open = parsed.maps_voting_open || false;
+            TOURNAMENT_DATA.maps_msg_id = parsed.maps_msg_id || null;
+            TOURNAMENT_DATA.map_votes = parsed.map_votes || {};
             
-            // Rikthen Map dhe Set nga JSON
             TOURNAMENT_DATA.teams = new Map(Object.entries(parsed.teams || {}));
             TOURNAMENT_DATA.checked_in = new Set(parsed.checked_in || []);
             
-            console.log("✔️ Të dhënat e turneut u ngarkuan me sukses nga ekipet.json!");
+            console.log("✔️ Të dhënat u ngarkuan nga ekipet.json!");
         } catch (error) {
             console.error("Gabim gjatë leximit të ekipet.json:", error);
         }
     }
 }
 
-// Shkruan të dhënat e reja në skedarin JSON në VS Code sa herë ndryshon diçka
 function saveTournamentData() {
     try {
         const dataToSave = {
@@ -69,74 +89,106 @@ function saveTournamentData() {
             checkin_open: TOURNAMENT_DATA.checkin_open,
             max_slots: TOURNAMENT_DATA.max_slots,
             slots_msg_id: TOURNAMENT_DATA.slots_msg_id,
-            teams: Object.fromEntries(TOURNAMENT_DATA.teams), // Koverton Map në Objekt normal për JSON
-            checked_in: Array.from(TOURNAMENT_DATA.checked_in) // Konverton Set në Array
+            reg_msg_id: TOURNAMENT_DATA.reg_msg_id,
+            reg_channel_id: TOURNAMENT_DATA.reg_channel_id,
+            maps_voting_open: TOURNAMENT_DATA.maps_voting_open,
+            maps_msg_id: TOURNAMENT_DATA.maps_msg_id,
+            map_votes: TOURNAMENT_DATA.map_votes,
+            teams: Object.fromEntries(TOURNAMENT_DATA.teams), 
+            checked_in: Array.from(TOURNAMENT_DATA.checked_in) 
         };
-        
         fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 4), 'utf8');
     } catch (error) {
-        console.error("Gabim gjatë ruajtjes së të dhënave në ekipet.json:", error);
+        console.error("Gabim gjatë ruajtjes në ekipet.json:", error);
     }
 }
 
 // ==========================================
-// FUNKSIONET NDihMËSE TË SLOTEVET
+// LOGJIKA NDihMËSE PËR VOTIMIN E HARTAVE
 // ==========================================
-function generateSlotsList() {
-    let lines = [];
-    const teamNames = Array.from(TOURNAMENT_DATA.teams.keys());
-
-    for (let i = 0; i < TOURNAMENT_DATA.max_slots; i++) {
-        if (i < teamNames.length) {
-            const teamName = teamNames[i];
-            const hasCheckedIn = TOURNAMENT_DATA.checked_in.has(teamName);
-            const statusText = hasCheckedIn ? "check in ✔️" : "not check in ⏱️";
-            lines.push(`slot ${i + 1}: **${teamName}** | status: ${statusText}`);
-        } else {
-            lines.push(`slot ${i + 1}: *I lirë / Empty*`);
+function getMapButtons(disabled = false) {
+    const rows = [];
+    let currentRow = new ActionRowBuilder();
+    
+    AVAILABLE_MAPS.forEach((map, index) => {
+        if (index > 0 && index % 4 === 0) { 
+            rows.push(currentRow);
+            currentRow = new ActionRowBuilder();
         }
-    }
-    return lines.join('\n');
+        currentRow.addComponents(
+            new ButtonBuilder()
+                .setCustomId(`vote_map_${map.toLowerCase()}`)
+                .setLabel(map)
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(disabled)
+        );
+    });
+    rows.push(currentRow);
+    return rows;
+}
+
+function countMapVotes() {
+    const counts = {};
+    AVAILABLE_MAPS.forEach(map => counts[map.toLowerCase()] = 0);
+    Object.values(TOURNAMENT_DATA.map_votes).forEach(userVotes => {
+        userVotes.forEach(map => {
+            if (counts[map] !== undefined) counts[map]++;
+        });
+    });
+    return counts;
+}
+
+// ==========================================
+// FUNKSIONET PËR EDITIMIN AUTOMATIK (DISPLAY)
+// ==========================================
+async function updateRegistrationDisplay() {
+    if (!TOURNAMENT_DATA.reg_msg_id || !TOURNAMENT_DATA.reg_channel_id) return;
+    try {
+        const channel = await client.channels.fetch(TOURNAMENT_DATA.reg_channel_id);
+        const msg = await channel.messages.fetch(TOURNAMENT_DATA.reg_msg_id);
+        const embed = new EmbedBuilder().setTitle('🎮 Regjistrimi në Turne është i HAPUR').setColor('#00FF00').setDescription(getSlotStatus());
+
+        if (TOURNAMENT_DATA.reg_open) {
+            await msg.edit({ embeds: [embed], components: [getRegistrationRow()] });
+        } else {
+            const closedEmbed = new EmbedBuilder().setTitle('❌ Regjistrimi në Turne është i MBYLLUR').setColor('#FF0000').setDescription(`Slotet përfundimtare: ${TOURNAMENT_DATA.teams.size}/${TOURNAMENT_DATA.max_slots}`);
+            await msg.edit({ embeds: [closedEmbed], components: [] });
+        }
+    } catch (e) { console.log("Gabim reg_display"); }
 }
 
 async function updateSlotsDisplay() {
     if (!SLOTS_CHANNEL_ID) return;
-
-    const embed = new EmbedBuilder()
-        .setTitle('🏆 Tabela Zyrtare e Sloteve (LIVE)')
-        .setColor('#0099ff')
-        .setDescription(generateSlotsList())
-        .setTimestamp()
-        .setFooter({ text: "Përditësuar automatikisht" });
-
+    const embed = new EmbedBuilder().setTitle('🏆 Tabela Zyrtare e Sloteve (LIVE)').setColor('#0099ff').setDescription(generateSlotsList()).setTimestamp().setFooter({ text: "Përditësuar automatikisht" });
     try {
         const targetChannel = await client.channels.fetch(SLOTS_CHANNEL_ID);
-        if (!targetChannel) return;
-
         if (TOURNAMENT_DATA.slots_msg_id) {
             try {
                 const existingMsg = await targetChannel.messages.fetch(TOURNAMENT_DATA.slots_msg_id);
                 await existingMsg.edit({ embeds: [embed] });
                 return;
-            } catch (err) {
-                console.log("Mesazhi i vjetër nuk u gjet, po krijoj një të ri...");
-            }
+            } catch (err) {}
         }
-
         const newMsg = await targetChannel.send({ embeds: [embed] });
         TOURNAMENT_DATA.slots_msg_id = newMsg.id;
-        saveTournamentData(); // Ruajmë ID-në e mesazhit të ri
+        saveTournamentData(); 
+    } catch (error) { console.error("Gabim slots_display", error); }
+}
 
-    } catch (error) {
-        console.error("Gabim gjatë përditësimit të kanalit të sloteve:", error);
+function generateSlotsList() {
+    let lines = [];
+    const teamNames = Array.from(TOURNAMENT_DATA.teams.keys());
+    for (let i = 0; i < TOURNAMENT_DATA.max_slots; i++) {
+        if (i < teamNames.length) {
+            const teamName = teamNames[i];
+            lines.push(`slot ${i + 1}: **${teamName}** | status: ${TOURNAMENT_DATA.checked_in.has(teamName) ? "check in ✔️" : "not check in ⏱️"}`);
+        } else { lines.push(`slot ${i + 1}: *I lirë / Empty*`); }
     }
+    return lines.join('\n');
 }
 
 function getSlotStatus() {
-    const filled = TOURNAMENT_DATA.teams.size;
-    const maxS = TOURNAMENT_DATA.max_slots;
-    const status = filled < maxS ? "Duke pranuar Ekipe ✔️" : "Slotet janë Plot ❌";
-    return `Slotet: ${filled}/${maxS} të plotësuara\nStatusi: ${status}`;
+    return `Slotet: ${TOURNAMENT_DATA.teams.size}/${TOURNAMENT_DATA.max_slots} të plotësuara\nStatusi: ${TOURNAMENT_DATA.teams.size < TOURNAMENT_DATA.max_slots ? "Duke pranuar Ekipe ✔️" : "Slotet janë Plot ❌"}`;
 }
 
 function getRegistrationRow() {
@@ -171,22 +223,79 @@ client.on('messageCreate', async (message) => {
 
     if (!message.member.permissions.has('Administrator')) return;
 
+    if (command === 'postmaps') {
+        if (!MAP_VOTING_CHANNEL_ID) return message.reply("❌ Gabim: MAP_VOTING_CHANNEL_ID nuk është caktuar në .env!");
+        TOURNAMENT_DATA.maps_voting_open = true;
+        saveTournamentData();
+
+        const embed = new EmbedBuilder()
+            .setTitle('🎮 MAP VOTING SYSTEM')
+            .setDescription('Votoni për hartat tuaja të preferuara! Mund të zgjidhni **deri në 3 harta**.\nKliko përsëri butonin nëse dëshiron të heqësh votën.')
+            .setColor('#FF9900')
+            .setTimestamp();
+
+        try {
+            const votingChannel = await client.channels.fetch(MAP_VOTING_CHANNEL_ID);
+            const voteMsg = await votingChannel.send({ embeds: [embed], components: getMapButtons(false) });
+            TOURNAMENT_DATA.maps_msg_id = voteMsg.id;
+            saveTournamentData();
+            return message.reply(`📢 Sesioni i votimit u hap te kanali <#${MAP_VOTING_CHANNEL_ID}>!`);
+        } catch (err) { return message.reply("❌ Gabim gjatë dërgimit të votimit."); }
+    }
+
+    if (command === 'closemaps') {
+        if (!TOURNAMENT_DATA.maps_voting_open || !TOURNAMENT_DATA.maps_msg_id) return message.reply("❌ Nuk ka sesion aktiv.");
+        TOURNAMENT_DATA.maps_voting_open = false;
+        saveTournamentData();
+
+        try {
+            const votingChannel = await client.channels.fetch(MAP_VOTING_CHANNEL_ID);
+            const voteMsg = await votingChannel.messages.fetch(TOURNAMENT_DATA.maps_msg_id);
+            await voteMsg.edit({ components: getMapButtons(true) });
+
+            const voteCounts = countMapVotes();
+            const sortedMaps = Object.entries(voteCounts)
+                .map(([name, count]) => ({ name: AVAILABLE_MAPS.find(m => m.toLowerCase() === name), count }))
+                .sort((a, b) => b.count - a.count);
+
+            const top3Lines = sortedMaps.slice(0, 3).map((m, idx) => `${idx + 1}. **${m.name}** – ${m.count} vota`).join('\n');
+            const resultsEmbed = new EmbedBuilder().setTitle('🛑 VOTIMI U MBYLL').setDescription(`**Top 3 Hartat:**\n\n${top3Lines || "Nuk ka vota."}`).setColor('#FF0000').setTimestamp();
+
+            await votingChannel.send({ embeds: [resultsEmbed] });
+            return message.reply("🔒 Votimi u mbyll!");
+        } catch (err) { return message.reply("❌ Gabim gjatë mbylljes."); }
+    }
+
+    if (command === 'resetmaps') {
+        TOURNAMENT_DATA.map_votes = {};
+        TOURNAMENT_DATA.maps_voting_open = false;
+        TOURNAMENT_DATA.maps_msg_id = null;
+        saveTournamentData();
+        return message.reply("🔄 Votat e hartave u fshinë.");
+    }
+
+    if (command === 'mapsresults') {
+        const voteCounts = countMapVotes();
+        const resultsLines = Object.entries(voteCounts).map(([name, count]) => `• **${AVAILABLE_MAPS.find(m => m.toLowerCase() === name)}** – ${count} vota`).join('\n');
+        const liveEmbed = new EmbedBuilder().setTitle('📊 Rezultatet Live').setDescription(resultsLines).setColor('#00FFFF').setTimestamp();
+        return message.reply({ embeds: [liveEmbed] });
+    }
+
     if (command === 'register') {
         const action = args[0]?.toLowerCase();
         if (action === 'open') {
             TOURNAMENT_DATA.reg_open = true;
+            const embed = new EmbedBuilder().setTitle('🎮 Regjistrimi në Turne është i HAPUR').setColor('#00FF00').setDescription(getSlotStatus());
+            const regMsg = await message.channel.send({ embeds: [embed], components: [getRegistrationRow()] });
+            TOURNAMENT_DATA.reg_msg_id = regMsg.id;
+            TOURNAMENT_DATA.reg_channel_id = message.channel.id;
             saveTournamentData();
-            const embed = new EmbedBuilder()
-                .setTitle('🎮 Regjistrimi në Turne është i HAPUR')
-                .setColor('#00FF00')
-                .setDescription(getSlotStatus());
-            
-            await message.channel.send({ embeds: [embed], components: [getRegistrationRow()] });
             await updateSlotsDisplay();
         } else if (action === 'close') {
             TOURNAMENT_DATA.reg_open = false;
+            await updateRegistrationDisplay(); 
             saveTournamentData();
-            await message.channel.send('❌ Regjistrimi është mbyllur aktualisht.');
+            await message.channel.send('❌ Regjistrimi është mbyllur.');
         }
     }
 
@@ -196,16 +305,12 @@ client.on('messageCreate', async (message) => {
             TOURNAMENT_DATA.checkin_open = true;
             saveTournamentData();
             const deadline = args.slice(1).join(' ') || 'TBD';
-            const embed = new EmbedBuilder()
-                .setTitle('⏱️ CHECK-IN ËSHTË I HAPUR')
-                .setColor('#FFCC00')
-                .setDescription(`Të gjitha ekipet duhet të konfirmojnë pjesëmarrjen.\n**Afati i fundit:** ${deadline}`);
-            
+            const embed = new EmbedBuilder().setTitle('⏱️ CHECK-IN ËSHTË I HAPUR').setColor('#FFCC00').setDescription(`Të gjitha ekipet duhet të konfirmojnë pjesëmarrjen.\n**Afati i fundit:** ${deadline}`);
             await message.channel.send({ embeds: [embed], components: [getCheckInRow()] });
         } else if (action === 'close') {
             TOURNAMENT_DATA.checkin_open = false;
             saveTournamentData();
-            await message.channel.send('❌ Faza e Check-in është mbyllur.');
+            await message.channel.send('❌ Faza e Check-in u mbyll.');
         }
     }
 
@@ -215,8 +320,10 @@ client.on('messageCreate', async (message) => {
         TOURNAMENT_DATA.reg_open = false;
         TOURNAMENT_DATA.checkin_open = false;
         TOURNAMENT_DATA.slots_msg_id = null;
-        saveTournamentData(); // Fshin gjithçka edhe nga skedari JSON
-        await message.channel.send('🔄 Sistemi i turneut u fshi plotësisht (Reset).');
+        TOURNAMENT_DATA.reg_msg_id = null;
+        TOURNAMENT_DATA.reg_channel_id = null;
+        saveTournamentData(); 
+        await message.channel.send('🔄 Sistemi u fshi (Reset).');
     }
 });
 
@@ -227,13 +334,29 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
         const { customId, user } = interaction;
 
+        if (customId.startsWith('vote_map_')) {
+            if (!TOURNAMENT_DATA.maps_voting_open) return interaction.reply({ content: "❌ Votimi është i mbyllur.", ephemeral: true });
+            const mapNameClean = customId.replace('vote_map_', '');
+            const readableMapName = AVAILABLE_MAPS.find(m => m.toLowerCase() === mapNameClean);
+
+            if (!TOURNAMENT_DATA.map_votes[user.id]) TOURNAMENT_DATA.map_votes[user.id] = [];
+            let userVotes = TOURNAMENT_DATA.map_votes[user.id];
+
+            if (userVotes.includes(mapNameClean)) {
+                TOURNAMENT_DATA.map_votes[user.id] = userVotes.filter(m => m !== mapNameClean);
+                saveTournamentData();
+                return interaction.reply({ content: `❌ Hoqe votën për **${readableMapName}**. (${TOURNAMENT_DATA.map_votes[user.id].length}/3)`, ephemeral: true });
+            }
+            if (userVotes.length >= 3) return interaction.reply({ content: "⚠️ Maksimumi 3 harta!", ephemeral: true });
+
+            TOURNAMENT_DATA.map_votes[user.id].push(mapNameClean);
+            saveTournamentData();
+            return interaction.reply({ content: `✅ Votove për **${readableMapName}**! (${TOURNAMENT_DATA.map_votes[user.id].length}/3)`, ephemeral: true });
+        }
+
         if (customId === 'reg_team_btn') {
-            if (!TOURNAMENT_DATA.reg_open) {
-                return interaction.reply({ content: '❌ Regjistrimi është aktualisht i mbyllur.', ephemeral: true });
-            }
-            if (TOURNAMENT_DATA.teams.size >= TOURNAMENT_DATA.max_slots) {
-                return interaction.reply({ content: '❌ Slotet janë plot. Regjistrimi u mbyll.', ephemeral: true });
-            }
+            if (!TOURNAMENT_DATA.reg_open) return interaction.reply({ content: '❌ Regjistrimi është mbyllur.', ephemeral: true });
+            if (TOURNAMENT_DATA.teams.size >= TOURNAMENT_DATA.max_slots) return interaction.reply({ content: '❌ Slotet janë plot.', ephemeral: true });
 
             const modal = new ModalBuilder().setCustomId('reg_modal').setTitle('🎮 Regjistrimi i Ekipit');
             modal.addComponents(
@@ -247,114 +370,82 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (customId === 'view_teams_btn') {
-            if (TOURNAMENT_DATA.teams.size === 0) {
-                return interaction.reply({ content: 'Nuk ka asnjë ekip të regjistruar deri tani.', ephemeral: true });
-            }
+            if (TOURNAMENT_DATA.teams.size === 0) return interaction.reply({ content: 'Nuk ka asnjë ekip.', ephemeral: true });
             const teamList = Array.from(TOURNAMENT_DATA.teams.keys()).map(name => `• **${name}**`).join('\n');
-            return interaction.reply({ content: `📋 **Ekipet e Regjistruara:**\n${teamList}`, ephemeral: true });
+            return interaction.reply({ content: `📋 **Ekipet:**\n${teamList}`, ephemeral: true });
         }
 
         if (customId === 'cancel_reg_btn') {
             let userTeam = null;
-            for (const [name, data] of TOURNAMENT_DATA.teams.entries()) {
-                if (data.leaderId === user.id) { userTeam = name; break; }
-            }
-
+            for (const [name, data] of TOURNAMENT_DATA.teams.entries()) { if (data.leaderId === user.id) { userTeam = name; break; } }
             if (userTeam) {
                 TOURNAMENT_DATA.teams.delete(userTeam);
                 TOURNAMENT_DATA.checked_in.delete(userTeam);
-                
-                saveTournamentData(); // Përditëso skedarin JSON
-                await interaction.reply({ content: `❌ Regjistrimi për ekipin **${userTeam}** u anulua me sukses.`, ephemeral: true });
+                saveTournamentData(); 
+                await interaction.reply({ content: `❌ U anulua ekipi **${userTeam}**`, ephemeral: true });
+                await updateRegistrationDisplay();
                 return updateSlotsDisplay();
             }
-            return interaction.reply({ content: '❌ Ju nuk jeni i regjistruar si lider i ndonjë ekipi.', ephemeral: true });
+            return interaction.reply({ content: '❌ Nuk jeni lider.', ephemeral: true });
         }
 
         if (customId === 'checkin_btn') {
-            if (!TOURNAMENT_DATA.checkin_open) {
-                return interaction.reply({ content: '❌ Faza e Check-in nuk është aktive.', ephemeral: true });
-            }
-
+            if (!TOURNAMENT_DATA.checkin_open) return interaction.reply({ content: '❌ Check-in jo aktiv.', ephemeral: true });
             let userTeam = null;
-            for (const [name, data] of TOURNAMENT_DATA.teams.entries()) {
-                if (data.leaderId === user.id) { userTeam = name; break; }
-            }
-
-            if (!userTeam) {
-                return interaction.reply({ content: '❌ Duhet të jeni Lider i një ekipi të regjistruar për të bërë check-in.', ephemeral: true });
-            }
+            for (const [name, data] of TOURNAMENT_DATA.teams.entries()) { if (data.leaderId === user.id) { userTeam = name; break; } }
+            if (!userTeam) return interaction.reply({ content: '❌ Duhet të jeni lider.', ephemeral: true });
 
             TOURNAMENT_DATA.checked_in.add(userTeam);
-            saveTournamentData(); // Përditëso skedarin JSON
-            await interaction.reply({ content: `✔ Ekipi **"${userTeam}"** bëri check-in me sukses!`, ephemeral: true });
+            saveTournamentData(); 
+            await interaction.reply({ content: `✔ Ekipi **"${userTeam}"** bëri check-in!`, ephemeral: true });
             return updateSlotsDisplay();
         }
 
         if (customId === 'view_checked_btn') {
-            if (TOURNAMENT_DATA.checked_in.size === 0) {
-                return interaction.reply({ content: 'Asnjë ekip nuk ka bërë check-in akoma.', ephemeral: true });
-            }
+            if (TOURNAMENT_DATA.checked_in.size === 0) return interaction.reply({ content: 'Asnjë check-in.', ephemeral: true });
             const checkedList = Array.from(TOURNAMENT_DATA.checked_in).map(team => `•  ✔️ ${team}`).join('\n');
-            return interaction.reply({ content: `📋 **Ekipet e Konfirmuara (Check-in):**\n${checkedList}`, ephemeral: true });
+            return interaction.reply({ content: `📋 **Konfirmimet:**\n${checkedList}`, ephemeral: true });
         }
 
         if (customId === 'decline_btn') {
             let userTeam = null;
-            for (const [name, data] of TOURNAMENT_DATA.teams.entries()) {
-                if (data.leaderId === user.id) { userTeam = name; break; }
-            }
-
+            for (const [name, data] of TOURNAMENT_DATA.teams.entries()) { if (data.leaderId === user.id) { userTeam = name; break; } }
             if (userTeam) {
                 TOURNAMENT_DATA.teams.delete(userTeam);
                 TOURNAMENT_DATA.checked_in.delete(userTeam);
-                saveTournamentData(); // Përditëso skedarin JSON
-                await interaction.reply({ content: `❌ Ekipi **${userTeam}** u tërhoq nga turneu.`, ephemeral: true });
+                saveTournamentData(); 
+                await interaction.reply({ content: `❌ Ekipi **${userTeam}** u tërhoq.`, ephemeral: true });
+                await updateRegistrationDisplay();
                 return updateSlotsDisplay();
             }
-            return interaction.reply({ content: '❌ Ju nuk jeni i lidhur me asnjë ekip të regjistruar.', ephemeral: true });
+            return interaction.reply({ content: '❌ S\'jeni në ekip.', ephemeral: true });
         }
     }
 
     if (interaction.isModalSubmit()) {
         if (interaction.customId === 'reg_modal') {
             const teamName = interaction.fields.getTextInputValue('team_name').trim();
-            const players = [
-                interaction.fields.getTextInputValue('p1').trim(),
-                interaction.fields.getTextInputValue('p2').trim(),
-                interaction.fields.getTextInputValue('p3').trim(),
-                interaction.fields.getTextInputValue('p4').trim()
-            ];
+            const players = [interaction.fields.getTextInputValue('p1').trim(), interaction.fields.getTextInputValue('p2').trim(), interaction.fields.getTextInputValue('p3').trim(), interaction.fields.getTextInputValue('p4').trim()];
 
-            if (TOURNAMENT_DATA.teams.has(teamName)) {
-                return interaction.reply({ content: '❌ Regjistrimi dështoi: Ky emër ekipi është i zënë.', ephemeral: true });
-            }
-
+            if (TOURNAMENT_DATA.teams.has(teamName)) return interaction.reply({ content: '❌ Emër i zënë.', ephemeral: true });
             const uniquePlayers = new Set(players);
-            if (uniquePlayers.size < 4) {
-                return interaction.reply({ content: '❌ Regjistrimi dështoi: Një lojtar nuk mund të përsëritet brenda të njëjtit ekip.', ephemeral: true });
-            }
+            if (uniquePlayers.size < 4) return interaction.reply({ content: '❌ Lojtarët nuk mund të përsëriten.', ephemeral: true });
 
             for (const data of TOURNAMENT_DATA.teams.values()) {
-                if (players.some(p => data.players.includes(p))) {
-                    return interaction.reply({ content: '❌ Regjistrimi dështoi: Një ose më shumë lojtarë janë të regjistruar në një ekip tjetër.', ephemeral: true });
-                }
+                if (players.some(p => data.players.includes(p))) return interaction.reply({ content: '❌ Lojtari është në ekip tjetër.', ephemeral: true });
             }
 
-            TOURNAMENT_DATA.teams.set(teamName, {
-                leaderId: interaction.user.id,
-                players: players
-            });
-
-            saveTournamentData(); // Ruaj regjistrimin e ri live në JSON file
-            await interaction.reply({ content: '🎉 Ekipi yt u regjistrua me sukses!', ephemeral: true });
+            TOURNAMENT_DATA.teams.set(teamName, { leaderId: interaction.user.id, players: players });
+            saveTournamentData(); 
+            await interaction.reply({ content: '🎉 Ekipi u regjistrua!', ephemeral: true });
+            await updateRegistrationDisplay(); 
             return updateSlotsDisplay();
         }
     }
 });
 
 client.once('ready', () => {
-    loadTournamentData(); // Lexon të dhënat e ruajtura nëse bot-i sapo u ndez
+    loadTournamentData(); 
     console.log(`✔️ Bot-i i Turneut u lidh si ${client.user.tag}`);
 });
 
