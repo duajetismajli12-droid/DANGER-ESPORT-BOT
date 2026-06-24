@@ -326,32 +326,51 @@ client.on('messageCreate', async (message) => {
         return message.channel.send({ embeds: [topEmbed] });
     }
 
-    // KOMANDA: TOP 5 LOJTARËT MË TË MIRË (MVP KILLS)
-    if (command === 'toplojtaret' || command === 'topplayers') {
+// KOMANDA: TOP 5 LOJTARËT MË TË MIRË (MVP KILLS)
+    if (command === 'toplojtaret' || command === 'topplayers' || command === 'topplayerss') {
         let allPlayers = [];
+        
         for (const [teamName, data] of TOURNAMENT_DATA.teams.entries()) {
-            if (data.player_stats) {
+            // 1. Nëse lojtarët kanë stats të ruajtura (killa nga screenshot-et)
+            if (data.player_stats && data.player_stats.length > 0) {
                 data.player_stats.forEach(p => {
                     allPlayers.push({ name: p.name, team: teamName, kills: p.kills || 0 });
+                });
+            } 
+            // 2. Nëse ekipi është i ri dhe nuk ka ende stats, i fusim lojtarët me 0 killa që të mos duket tabela bosh
+            else if (data.players && data.players.length > 0) {
+                data.players.forEach(pInput => {
+                    const cleanName = pInput.split('@')[0].trim();
+                    allPlayers.push({ name: cleanName, team: teamName, kills: 0 });
                 });
             }
         }
 
-        if (allPlayers.length === 0) return message.reply("❌ Nuk ka ende të dhëna lojtarësh të regjistruar.");
+        if (allPlayers.length === 0) {
+            return message.reply("❌ Nuk ka asnjë lojtar të regjistruar në turne për momentin.");
+        }
+
+        // Renditja nga ai me më shumë killa te ai me më pak
         const sortedPlayers = allPlayers.sort((a, b) => b.kills - a.kills).slice(0, 5);
 
         let descLines = [];
         sortedPlayers.forEach((p, index) => {
-            let medal = index === 0 ? "👑" : index === 1 ? "🥈" : index === 2 ? "🥉" : "👤";
+            let medal = "👤";
+            if (index === 0) medal = "👑";
+            if (index === 1) medal = "🥈";
+            if (index === 2) medal = "🥉";
             descLines.push(`${medal} **#${index + 1}** Lojtari: **${p.name}** [${p.team}] — 🎯 **${p.kills} Kills**`);
         });
 
-        const playerEmbed = new EmbedBuilder().setTitle('👑 DANGER ESPORTS — TOP 5 LOJTARËT MË VRASËS (MVP)').setDescription(descLines.join('\n\n')).setColor('#00FFCC');
+        const playerEmbed = new EmbedBuilder()
+            .setTitle('👑 DANGER ESPORTS — TOP 5 LOJTARËT MË VRASËS (MVP)')
+            .setDescription(descLines.join('\n\n'))
+            .setColor('#00FFCC')
+            .setTimestamp();
+
         return message.channel.send({ embeds: [playerEmbed] });
     }
-
-    if (!message.member.permissions.has('Administrator')) return;
-
+    
     // KOMANDA BACKUP: SHTIMI / EDITIMI MANUAL I KILLA-VE TË LOJTARËVE
     if (command === 'addpk') {
         if (args.length < 5) return message.reply('⚠️ Përdorimi: \`!addpk <k1> <k2> <k3> <k4> <Emri i Ekipit>\`\n*Shembull: !addpk 5 2 0 4 Danger Team*');
