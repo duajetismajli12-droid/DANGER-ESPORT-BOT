@@ -1,6 +1,7 @@
 require('dotenv').config();
 const fs = require('fs'); 
-const http = require('http'); // 🔥 SHTESA PËR RENDER: Moduli për hapjen e portës
+const http = require('http'); 
+
 const { 
     Client, 
     GatewayIntentBits, 
@@ -14,7 +15,7 @@ const {
 } = require('discord.js');
 
 // ==========================================
-// 🔥 SHTESA KRYESORE PËR RENDER (DUMMY SERVER)
+// RENDER DUMMY SERVER
 // ==========================================
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
@@ -28,7 +29,8 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers // 🔥 SHTESË: Lejon bot-in të kërkojë lojtarët dhe t'u japë role
     ]
 });
 
@@ -37,7 +39,7 @@ const SLOTS_CHANNEL_ID = process.env.SLOTS_CHANNEL_ID;
 const MAP_VOTING_CHANNEL_ID = process.env.MAP_VOTING_CHANNEL_ID; 
 const DATA_FILE = './ekipet.json'; 
 
-const AVAILABLE_MAPS = ['Erangel', 'Miramar', 'Sanhok', 'Vikendi', 'Erangel', 'Rondo'];
+const AVAILABLE_MAPS = ['Erangel', 'Miramar', 'Sanhok', 'Vikendi', 'Taego', 'Rondo'];
 
 const TOURNAMENT_DATA = {
     reg_open: false,
@@ -76,9 +78,7 @@ function loadTournamentData() {
             TOURNAMENT_DATA.checked_in = new Set(parsed.checked_in || []);
             
             console.log("✔️ Të dhënat u ngarkuan nga ekipet.json!");
-        } catch (error) {
-            console.error("Gabim gjatë leximit të ekipet.json:", error);
-        }
+        } catch (error) { console.error(error); }
     }
 }
 
@@ -98,9 +98,7 @@ function saveTournamentData() {
             checked_in: Array.from(TOURNAMENT_DATA.checked_in) 
         };
         fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 4), 'utf8');
-    } catch (error) {
-        console.error("Gabim gjatë ruajtjes në ekipet.json:", error);
-    }
+    } catch (error) { console.error(error); }
 }
 
 // ==========================================
@@ -109,19 +107,9 @@ function saveTournamentData() {
 function getMapButtons(disabled = false) {
     const rows = [];
     let currentRow = new ActionRowBuilder();
-    
     AVAILABLE_MAPS.forEach((map, index) => {
-        if (index > 0 && index % 4 === 0) { 
-            rows.push(currentRow);
-            currentRow = new ActionRowBuilder();
-        }
-        currentRow.addComponents(
-            new ButtonBuilder()
-                .setCustomId(`vote_map_${map.toLowerCase()}`)
-                .setLabel(map)
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(disabled)
-        );
+        if (index > 0 && index % 4 === 0) { rows.push(currentRow); currentRow = new ActionRowBuilder(); }
+        currentRow.addComponents(new ButtonBuilder().setCustomId(`vote_map_${map.toLowerCase()}`).setLabel(map).setStyle(ButtonStyle.Secondary).setDisabled(disabled));
     });
     rows.push(currentRow);
     return rows;
@@ -131,15 +119,13 @@ function countMapVotes() {
     const counts = {};
     AVAILABLE_MAPS.forEach(map => counts[map.toLowerCase()] = 0);
     Object.values(TOURNAMENT_DATA.map_votes).forEach(userVotes => {
-        userVotes.forEach(map => {
-            if (counts[map] !== undefined) counts[map]++;
-        });
+        userVotes.forEach(map => { if (counts[map] !== undefined) counts[map]++; });
     });
     return counts;
 }
 
 // ==========================================
-// FUNKSIONET PËR EDITIMIN AUTOMATIK (DISPLAY)
+// FUNKSIONET DISPLAY
 // ==========================================
 async function updateRegistrationDisplay() {
     if (!TOURNAMENT_DATA.reg_msg_id || !TOURNAMENT_DATA.reg_channel_id) return;
@@ -172,7 +158,7 @@ async function updateSlotsDisplay() {
         const newMsg = await targetChannel.send({ embeds: [embed] });
         TOURNAMENT_DATA.slots_msg_id = newMsg.id;
         saveTournamentData(); 
-    } catch (error) { console.error("Gabim slots_display", error); }
+    } catch (error) { console.error(error); }
 }
 
 function generateSlotsList() {
@@ -208,7 +194,7 @@ function getCheckInRow() {
 }
 
 // ==========================================
-// MENAXHIMI I KOMANDAVE TË TEKSTIT
+// KOMANDAT ME TEKST
 // ==========================================
 client.on('messageCreate', async (message) => {
     if (!message.content.startsWith(PREFIX) || message.author.bot) return;
@@ -240,7 +226,7 @@ client.on('messageCreate', async (message) => {
             TOURNAMENT_DATA.maps_msg_id = voteMsg.id;
             saveTournamentData();
             return message.reply(`📢 Sesioni i votimit u hap te kanali <#${MAP_VOTING_CHANNEL_ID}>!`);
-        } catch (err) { return message.reply("❌ Gabim gjatë dërgimit të votimit."); }
+        } catch (err) { return message.reply("❌ Gabim te votimi."); }
     }
 
     if (command === 'closemaps') {
@@ -328,7 +314,7 @@ client.on('messageCreate', async (message) => {
 });
 
 // ==========================================
-// MENAXHIMI I INTERAKSIONEVE
+// INTERAKSIONET (BUTONAT / MODAL SUBMIT)
 // ==========================================
 client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
@@ -358,13 +344,14 @@ client.on('interactionCreate', async (interaction) => {
             if (!TOURNAMENT_DATA.reg_open) return interaction.reply({ content: '❌ Regjistrimi është mbyllur.', ephemeral: true });
             if (TOURNAMENT_DATA.teams.size >= TOURNAMENT_DATA.max_slots) return interaction.reply({ content: '❌ Slotet janë plot.', ephemeral: true });
 
+            // 🔥 EDITIM: Udhëzojmë liderin që të shkruajë Username-at ose ID e saktë të shokëve
             const modal = new ModalBuilder().setCustomId('reg_modal').setTitle('🎮 Regjistrimi i Ekipit');
             modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('team_name').setLabel('Emri i Ekipit').setStyle(TextInputStyle.Short).setRequired(true)),
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p1').setLabel('Lojtari 1 (Lideri)').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p2').setLabel('Lojtari 2').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p3').setLabel('Lojtari 3').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p4').setLabel('Lojtari 4').setStyle(TextInputStyle.Short).setRequired(true))
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p2').setLabel('Lojtari 2 (Username ose ID)').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p3').setLabel('Lojtari 3 (Username ose ID)').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p4').setLabel('Lojtari 4 (Username ose ID)').setStyle(TextInputStyle.Short).setRequired(true))
             );
             return interaction.showModal(modal);
         }
@@ -422,10 +409,17 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
+    // ==========================================
+    // 🔥 LOGJIKA E RE: SUBMIT FORMULARI (ROLET DHE TAG)
+    // ==========================================
     if (interaction.isModalSubmit()) {
         if (interaction.customId === 'reg_modal') {
             const teamName = interaction.fields.getTextInputValue('team_name').trim();
-            const players = [interaction.fields.getTextInputValue('p1').trim(), interaction.fields.getTextInputValue('p2').trim(), interaction.fields.getTextInputValue('p3').trim(), interaction.fields.getTextInputValue('p4').trim()];
+            const p1Input = interaction.fields.getTextInputValue('p1').trim();
+            const p2Input = interaction.fields.getTextInputValue('p2').trim();
+            const p3Input = interaction.fields.getTextInputValue('p3').trim();
+            const p4Input = interaction.fields.getTextInputValue('p4').trim();
+            const players = [p1Input, p2Input, p3Input, p4Input];
 
             if (TOURNAMENT_DATA.teams.has(teamName)) return interaction.reply({ content: '❌ Emër i zënë.', ephemeral: true });
             const uniquePlayers = new Set(players);
@@ -435,9 +429,73 @@ client.on('interactionCreate', async (interaction) => {
                 if (players.some(p => data.players.includes(p))) return interaction.reply({ content: '❌ Lojtari është në ekip tjetër.', ephemeral: true });
             }
 
+            // 1. Gjejmë ose krijojmë rolin 'register scrims'
+            let scrimsRole = interaction.guild.roles.cache.find(r => r.name === 'register scrims');
+            if (!scrimsRole) {
+                try {
+                    scrimsRole = await interaction.guild.roles.create({
+                        name: 'register scrims',
+                        color: '#00ffcc',
+                        reason: 'Krijuar nga boti për lojtarët e turneut'
+                    });
+                } catch (err) { console.log("Roli nuk u krijua dot automatikisht."); }
+            }
+
+            const resolvedMembers = [];
+            const mentionsOutput = [];
+
+            // Lideri (Lojtari 1) është personi që po klikon butonin
+            resolvedMembers.push(interaction.member);
+            mentionsOutput.push(`<@${interaction.user.id}>`);
+
+            // Funksion inteligjent për gjetjen e lojtarëve të tjerë
+            async function getMemberByInput(guild, input) {
+                const idMatch = input.match(/\d+/)?.[0]; // Nëse bëjnë copy/paste ID-në ose Tag-un direkt
+                if (idMatch) {
+                    const m = await guild.members.fetch(idMatch).catch(() => null);
+                    if (m) return m;
+                }
+                const clean = input.toLowerCase();
+                let m = guild.members.cache.find(mem => mem.user.username.toLowerCase() === clean || mem.displayName.toLowerCase() === clean);
+                if (!m) {
+                    const fetched = await guild.members.fetch({ query: clean, limit: 1 }).catch(() => null);
+                    if (fetched && fetched.first()) m = fetched.first();
+                }
+                return m;
+            }
+
+            // Kërkojmë Lojtarët 2, 3 dhe 4 në Discord
+            for (const pInput of [p2Input, p3Input, p4Input]) {
+                const member = await getMemberByInput(interaction.guild, pInput);
+                if (member) {
+                    resolvedMembers.push(member);
+                    mentionsOutput.push(`<@${member.id}>`);
+                } else {
+                    mentionsOutput.push(`**${pInput}**`); // Nëse s'gjendet në server, mbetet thjesht tekst
+                }
+            }
+
+            // 2. U japim rolin të gjithë lojtarëve që u gjetën me sukses
+            if (scrimsRole) {
+                for (const mem of resolvedMembers) {
+                    try {
+                        await mem.roles.add(scrimsRole);
+                    } catch (err) { console.error(`Gabim gjatë dhënies së rolit për një lojtar.`); }
+                }
+            }
+
+            // Ruajmë skuadrën te JSON
             TOURNAMENT_DATA.teams.set(teamName, { leaderId: interaction.user.id, players: players });
             saveTournamentData(); 
-            await interaction.reply({ content: '🎉 Ekipi u regjistrua!', ephemeral: true });
+
+            // 3. DËRGIMI I MESAZHIT ME TAG TE KANALI PUBLIK
+            await interaction.channel.send({
+                content: `🎉 **Ekipi u regjistrua me sukses!**\n🏆 Ekipi: **${teamName}**\n👥 Lojtarët: ${mentionsOutput.join(', ')}\n✅ Kanë marrë rolin: ${scrimsRole ? `<@&${scrimsRole.id}>` : '**register scrims**'}`
+            });
+
+            // Përgjigje private për liderin
+            await interaction.reply({ content: '🎉 U regjistruat! Shokët e skuadrës u taguan dhe morën rolin e turneut.', ephemeral: true });
+            
             await updateRegistrationDisplay(); 
             return updateSlotsDisplay();
         }
