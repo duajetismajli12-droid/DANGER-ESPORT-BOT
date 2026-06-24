@@ -30,7 +30,7 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers // 🔥 SHTESË: Lejon bot-in të kërkojë lojtarët dhe t'u japë role
+        GatewayIntentBits.GuildMembers 
     ]
 });
 
@@ -102,7 +102,7 @@ function saveTournamentData() {
 }
 
 // ==========================================
-// LOGJIKA NDihMËSE PËR VOTIMIN E HARTAVE
+// LOGJIKA E VOTIMIT TË HARTAVE
 // ==========================================
 function getMapButtons(disabled = false) {
     const rows = [];
@@ -344,14 +344,14 @@ client.on('interactionCreate', async (interaction) => {
             if (!TOURNAMENT_DATA.reg_open) return interaction.reply({ content: '❌ Regjistrimi është mbyllur.', ephemeral: true });
             if (TOURNAMENT_DATA.teams.size >= TOURNAMENT_DATA.max_slots) return interaction.reply({ content: '❌ Slotet janë plot.', ephemeral: true });
 
-            // 🔥 EDITIM: Udhëzojmë liderin që të shkruajë Username-at ose ID e saktë të shokëve
+            // 🔥 EDITIMI: Urdhëri yt i ri për emërtimin e kutive të tekstit!
             const modal = new ModalBuilder().setCustomId('reg_modal').setTitle('🎮 Regjistrimi i Ekipit');
             modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('team_name').setLabel('Emri i Ekipit').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p1').setLabel('Lojtari 1 (Lideri)').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p2').setLabel('Lojtari 2 (Username ose ID)').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p3').setLabel('Lojtari 3 (Username ose ID)').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p4').setLabel('Lojtari 4 (Username ose ID)').setStyle(TextInputStyle.Short).setRequired(true))
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p1').setLabel('Lojtari 1 (Pubg Name dhe @discord user)').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p2').setLabel('Lojtari 2 (Pubg Name dhe @discord user)').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p3').setLabel('Lojtari 3 (Pubg Name dhe @discord user)').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('p4').setLabel('Lojtari 4 (Pubg Name dhe @discord user)').setStyle(TextInputStyle.Short).setRequired(true))
             );
             return interaction.showModal(modal);
         }
@@ -409,9 +409,6 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // ==========================================
-    // 🔥 LOGJIKA E RE: SUBMIT FORMULARI (ROLET DHE TAG)
-    // ==========================================
     if (interaction.isModalSubmit()) {
         if (interaction.customId === 'reg_modal') {
             const teamName = interaction.fields.getTextInputValue('team_name').trim();
@@ -429,7 +426,6 @@ client.on('interactionCreate', async (interaction) => {
                 if (players.some(p => data.players.includes(p))) return interaction.reply({ content: '❌ Lojtari është në ekip tjetër.', ephemeral: true });
             }
 
-            // 1. Gjejmë ose krijojmë rolin 'register scrims'
             let scrimsRole = interaction.guild.roles.cache.find(r => r.name === 'register scrims');
             if (!scrimsRole) {
                 try {
@@ -444,56 +440,56 @@ client.on('interactionCreate', async (interaction) => {
             const resolvedMembers = [];
             const mentionsOutput = [];
 
-            // Lideri (Lojtari 1) është personi që po klikon butonin
+            // Për Liderin (Lojtari 1)
             resolvedMembers.push(interaction.member);
             mentionsOutput.push(`<@${interaction.user.id}>`);
 
-            // Funksion inteligjent për gjetjen e lojtarëve të tjerë
+            // 🔥 LOGJIKA INTELIGJENTE: Ndajmë emrin PUBG nga Tag-u i Discord-it
             async function getMemberByInput(guild, input) {
-                const idMatch = input.match(/\d+/)?.[0]; // Nëse bëjnë copy/paste ID-në ose Tag-un direkt
+                const idMatch = input.match(/\d+/)?.[0]; 
                 if (idMatch) {
                     const m = await guild.members.fetch(idMatch).catch(() => null);
                     if (m) return m;
                 }
-                const clean = input.toLowerCase();
-                let m = guild.members.cache.find(mem => mem.user.username.toLowerCase() === clean || mem.displayName.toLowerCase() === clean);
-                if (!m) {
-                    const fetched = await guild.members.fetch({ query: clean, limit: 1 }).catch(() => null);
+                
+                // Marrim fjalën e fundit të shkruar në kuti (supozohet të jetë tag-u ose username i discord)
+                const words = input.split(/\s+/);
+                const lastWord = words[words.length - 1].replace('@', '').toLowerCase().trim();
+                
+                let m = guild.members.cache.find(mem => mem.user.username.toLowerCase() === lastWord || mem.displayName.toLowerCase() === lastWord);
+                if (!m && lastWord.length > 0) {
+                    const fetched = await guild.members.fetch({ query: lastWord, limit: 1 }).catch(() => null);
                     if (fetched && fetched.first()) m = fetched.first();
                 }
                 return m;
             }
 
-            // Kërkojmë Lojtarët 2, 3 dhe 4 në Discord
+            // Kërkojmë Lojtarët e tjerë
             for (const pInput of [p2Input, p3Input, p4Input]) {
                 const member = await getMemberByInput(interaction.guild, pInput);
                 if (member) {
                     resolvedMembers.push(member);
                     mentionsOutput.push(`<@${member.id}>`);
                 } else {
-                    mentionsOutput.push(`**${pInput}**`); // Nëse s'gjendet në server, mbetet thjesht tekst
+                    mentionsOutput.push(`**${pInput}**`); 
                 }
             }
 
-            // 2. U japim rolin të gjithë lojtarëve që u gjetën me sukses
             if (scrimsRole) {
                 for (const mem of resolvedMembers) {
                     try {
                         await mem.roles.add(scrimsRole);
-                    } catch (err) { console.error(`Gabim gjatë dhënies së rolit për një lojtar.`); }
+                    } catch (err) { console.error(`Gabim gjatë dhënies së rolit.`); }
                 }
             }
 
-            // Ruajmë skuadrën te JSON
             TOURNAMENT_DATA.teams.set(teamName, { leaderId: interaction.user.id, players: players });
             saveTournamentData(); 
 
-            // 3. DËRGIMI I MESAZHIT ME TAG TE KANALI PUBLIK
             await interaction.channel.send({
                 content: `🎉 **Ekipi u regjistrua me sukses!**\n🏆 Ekipi: **${teamName}**\n👥 Lojtarët: ${mentionsOutput.join(', ')}\n✅ Kanë marrë rolin: ${scrimsRole ? `<@&${scrimsRole.id}>` : '**register scrims**'}`
             });
 
-            // Përgjigje private për liderin
             await interaction.reply({ content: '🎉 U regjistruat! Shokët e skuadrës u taguan dhe morën rolin e turneut.', ephemeral: true });
             
             await updateRegistrationDisplay(); 
