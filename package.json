@@ -1,17 +1,14 @@
 {
   "name": "pubg-danger-bot",
   "version": "1.0.0",
-  "description": "Discord Bot per Turne PUBG",
+  "description": "PUBG Mobile Tournament Discord Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.14.1",
-    "dotenv": "^16.4.5"
-    "tesseract.js": "^7.0.0"
-  },
-  "engines": {
-    "node": ">=16.0.0"
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "tesseract.js": "^5.1.0"
   }
 }
