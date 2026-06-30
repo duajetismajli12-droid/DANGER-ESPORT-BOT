@@ -54,7 +54,12 @@ const TOURNAMENT_DATA = {
     reg_channel_id: null,
     maps_voting_open: false,
     maps_msg_id: null,
-    map_votes: {} 
+    map_votes: {},
+    // Të dhënat e reja për ndeshjen LIVE
+    day: 1,
+    game: 1,
+    players_alive: 0,
+    kill_list: []
 };
 
 function getPlacementPoints(rank) {
@@ -87,6 +92,12 @@ function loadTournamentData() {
             TOURNAMENT_DATA.maps_msg_id = parsed.maps_msg_id || null;
             TOURNAMENT_DATA.map_votes = parsed.map_votes || {};
             
+            // Ngarkimi i vlerave live të ndeshjes
+            TOURNAMENT_DATA.day = parsed.day || 1;
+            TOURNAMENT_DATA.game = parsed.game || 1;
+            TOURNAMENT_DATA.players_alive = parsed.players_alive !== undefined ? parsed.players_alive : 0;
+            TOURNAMENT_DATA.kill_list = parsed.kill_list || [];
+            
             TOURNAMENT_DATA.teams = new Map(Object.entries(parsed.teams || {}));
             TOURNAMENT_DATA.checked_in = new Set(parsed.checked_in || []);
         } catch (error) { console.error(error); }
@@ -105,11 +116,25 @@ function saveTournamentData() {
             maps_voting_open: TOURNAMENT_DATA.maps_voting_open,
             maps_msg_id: TOURNAMENT_DATA.maps_msg_id,
             map_votes: TOURNAMENT_DATA.map_votes,
+            // Ruajtja e vlerave live të ndeshjes
+            day: TOURNAMENT_DATA.day,
+            game: TOURNAMENT_DATA.game,
+            players_alive: TOURNAMENT_DATA.players_alive,
+            kill_list: TOURNAMENT_DATA.kill_list,
             teams: Object.fromEntries(TOURNAMENT_DATA.teams), 
             checked_in: Array.from(TOURNAMENT_DATA.checked_in) 
         };
         fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 4), 'utf8');
     } catch (error) { console.error(error); }
+}
+
+// Funksion ndihmës për të krijuar mesazhin e statusit live
+function generateLiveMatchStatus() {
+    const formatKills = TOURNAMENT_DATA.kill_list.length > 0 
+        ? TOURNAMENT_DATA.kill_list.join('\n') 
+        : '-';
+
+    return `Day: ${TOURNAMENT_DATA.day}\nGame: ${TOURNAMENT_DATA.game}\n\nPlayers Alive: ${TOURNAMENT_DATA.players_alive}\n\nKills:\n${formatKills}`;
 }
 
 function generateSlotsList() {
@@ -285,6 +310,63 @@ client.on('messageCreate', async (message) => {
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
+    // ---- KOMANDAT E REJA LIVE ----
+    
+    // 1. !day <numri>
+    if (command === 'day') {
+        const dayNum = parseInt(args[0]);
+        if (isNaN(dayNum)) return message.reply('⚠️ Përdorimi: `!day 1`');
+        TOURNAMENT_DATA.day = dayNum;
+        saveTournamentData();
+        return message.channel.send(generateLiveMatchStatus());
+    }
+
+    // 2. !game <numri>
+    if (command === 'game') {
+        const gameNum = parseInt(args[0]);
+        if (isNaN(gameNum)) return message.reply('⚠️ Përdorimi: `!game 2`');
+        TOURNAMENT_DATA.game = gameNum;
+        // Opsionale: Fshijmë listën e vrasjeve të lojës së kaluar pasi nis një lojë e re
+        TOURNAMENT_DATA.kill_list = [];
+        saveTournamentData();
+        return message.channel.send(generateLiveMatchStatus());
+    }
+
+    // 3. !playersalive <numri>
+    if (command === 'playersalive') {
+        const aliveNum = parseInt(args[0]);
+        if (isNaN(aliveNum)) return message.reply('⚠️ Përdorimi: `!playersalive 90`');
+        TOURNAMENT_DATA.players_alive = aliveNum;
+        saveTournamentData();
+        return message.channel.send(generateLiveMatchStatus());
+    }
+
+    // 4. !kill Player1 vs Player2
+    if (command === 'kill') {
+        const fullText = args.join(' ');
+        const parts = fullText.split(/\s+vs\s+/i); // ndan tekstin tek "vs" pa marrë parasysh shkronjat e mëdha/vogla
+        
+        if (parts.length !== 2) {
+            return message.reply('⚠️ Përdorimi: `!kill Player1 vs Player2`');
+        }
+
+        const player1 = parts[0].trim();
+        const player2 = parts[1].trim();
+
+        // Ulim numrin e lojtarëve gjallë me 1 (nëse është mbi 0)
+        if (TOURNAMENT_DATA.players_alive > 0) {
+            TOURNAMENT_DATA.players_alive -= 1;
+        }
+
+        // Shtojmë vrasjen në listë
+        TOURNAMENT_DATA.kill_list.push(`${player1} killed ${player2}.`);
+        saveTournamentData();
+        
+        return message.channel.send(generateLiveMatchStatus());
+    }
+
+    // ---- FUNDI I KOMANDAVE TË REJA ----
+
     if (command === 'standings' || command === 'tabela') {
         if (TOURNAMENT_DATA.teams.size === 0) return message.reply("❌ Nuk ka ekipe.");
 
@@ -326,18 +408,16 @@ client.on('messageCreate', async (message) => {
         return message.channel.send({ embeds: [topEmbed] });
     }
 
-// KOMANDA: TOP 5 LOJTARËT MË TË MIRË (MVP KILLS)
+    // KOMANDA: TOP 5 LOJTARËT MË TË MIRË (MVP KILLS)
     if (command === 'toplojtaret' || command === 'topplayers' || command === 'topplayerss') {
         let allPlayers = [];
         
         for (const [teamName, data] of TOURNAMENT_DATA.teams.entries()) {
-            // 1. Nëse lojtarët kanë stats të ruajtura (killa nga screenshot-et)
             if (data.player_stats && data.player_stats.length > 0) {
                 data.player_stats.forEach(p => {
                     allPlayers.push({ name: p.name, team: teamName, kills: p.kills || 0 });
                 });
             } 
-            // 2. Nëse ekipi është i ri dhe nuk ka ende stats, i fusim lojtarët me 0 killa që të mos duket tabela bosh
             else if (data.players && data.players.length > 0) {
                 data.players.forEach(pInput => {
                     const cleanName = pInput.split('@')[0].trim();
@@ -350,7 +430,6 @@ client.on('messageCreate', async (message) => {
             return message.reply("❌ Nuk ka asnjë lojtar të regjistruar në turne për momentin.");
         }
 
-        // Renditja nga ai me më shumë killa te ai me më pak
         const sortedPlayers = allPlayers.sort((a, b) => b.kills - a.kills).slice(0, 5);
 
         let descLines = [];
@@ -431,8 +510,14 @@ client.on('messageCreate', async (message) => {
             if (data.player_stats) data.player_stats.forEach(p => p.kills = 0);
             TOURNAMENT_DATA.teams.set(name, data);
         }
+        // Gjithashtu bëjmë reset të dhënat live të lojës
+        TOURNAMENT_DATA.day = 1;
+        TOURNAMENT_DATA.game = 1;
+        TOURNAMENT_DATA.players_alive = 0;
+        TOURNAMENT_DATA.kill_list = [];
+        
         saveTournamentData();
-        return message.reply('🔄 Të gjitha statistikat (përfshirë lojtarët) u bënë 0.');
+        return message.reply('🔄 Të gjitha statistikat (përfshirë lojtarët dhe ndeshjen live) u bënë 0.');
     }
 
     if (command === 'register' && args[0] === 'open') {
